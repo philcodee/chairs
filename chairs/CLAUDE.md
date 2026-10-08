@@ -11,6 +11,7 @@ Current setup: three chairs (`chair 1`, `chair 2`, `chair 3`) in front of a tabl
 Single HTML file, no build step.
 
 - **Run:** `python3 -m http.server` in this folder, then open `http://localhost:8000/reader.html`. The camera only works on localhost or HTTPS.
+- **Deploy:** Netlify, configured by `netlify.toml` at the repo root. It publishes the `chairs/` folder with no build step and serves `reader.html` at `/`.
 - **Detection:** the browser's native `BarcodeDetector` API, falling back to the `barcode-detector` npm polyfill (ZXing/WASM) from jsDelivr. Both return every code in a frame. (`jsQR` was ruled out because it reads only one code per frame.)
 - **Repeated codes:** several printed copies can share the same QR text. Each copy gets its own track id (`kathy's stuff`, `kathy's stuff #2`, …) and is matched frame to frame by position. A card that jumps far between frames keeps its existing track rather than becoming `#2`; a new `#n` id is created only when more copies are in view than are already tracked.
 - **Roles:** every code is a **Chair** or **Stuff**, decided only by its QR text: text ending in "stuff"/"things"/"belongings" → Stuff; anything else → Chair. Names and roles can't be edited in the UI (the Objects list was removed).

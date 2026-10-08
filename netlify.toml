@@ -1,0 +1,10 @@
+# Static site, no build step. The site lives in chairs/.
+[build]
+  publish = "chairs"
+  command = ""
+
+# The app's entry page is reader.html, not index.html.
+[[redirects]]
+  from = "/"
+  to = "/reader.html"
+  status = 200
