@@ -1,0 +1,498 @@
+/*
+  Chair Reader — stylesheet
+
+  Taken from style.css (Sound Journaling): the token layer, the w95fa +
+  Space Grotesk + system-mono pairing, the heavy rules, and the inverting
+  outline buttons. Nothing else from that page applies here.
+
+  TYPE
+  w95fa for the page title and the seating counts. System monospace for
+  everything you scan: section labels, controls, codes, the log.
+
+  COLOUR
+  Monochrome, named through tokens.
+*/
+
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap');
+
+@font-face {
+  font-family: 'w95fa';
+  src: url('w95fa/w95fa.woff2') format('woff2'),
+       url('w95fa/w95fa.woff') format('woff'),
+       url('w95fa/W95FA.otf') format('opentype');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
+
+/* ── TOKENS ─────────────────────────────────────────────── */
+
+:root {
+  --bg: #d6d4d0;
+  --ink: #000000;
+  --ink-dim: #6b6862;
+
+  /* Text sitting on a filled ink ground — the inverse of --ink. */
+  --on-accent: var(--bg);
+
+  --rule: var(--ink);
+
+  --border-width: 3px;
+  --border-heavy-width: 6px;
+  --border: var(--border-width) solid var(--rule);
+  --border-heavy: var(--border-heavy-width) solid var(--rule);
+  --border-thin: 2px solid var(--rule);
+
+  --font-display: 'w95fa', ui-monospace, monospace;
+  --font-prose: 'Space Grotesk', system-ui, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Code", "Source Code Pro",
+               Menlo, Consolas, "DejaVu Sans Mono", monospace;
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+
+  --text-xs:   0.75rem;
+  --text-sm:   0.875rem;
+  --text-lg:   clamp(1.25rem, 1.10rem + 0.70vw, 1.625rem);
+  --text-xl:   clamp(1.75rem, 1.35rem + 1.90vw, 3rem);
+}
+
+/* The nav and the states drawer are inverted: light ink on a black ground.
+   Tokens built from --ink are re-declared here because custom properties
+   resolve where they are defined, not where they are used. */
+header,
+.drawer {
+  --bg: #000000;
+  --ink: #d6d4d0;
+  --ink-dim: #9a968f;
+  --on-accent: var(--bg);
+  --rule: var(--ink);
+  --border: var(--border-width) solid var(--rule);
+  --border-heavy: var(--border-heavy-width) solid var(--rule);
+  --border-thin: 2px solid var(--rule);
+}
+
+
+/* ── RESET & PAGE ───────────────────────────────────────── */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-size: 16px;
+  background: var(--bg);
+  color: var(--ink);
+  scrollbar-width: thin;
+  scrollbar-color: var(--ink) transparent;
+}
+
+/* The page is the nav plus a camera view filling everything below it. */
+body {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+::selection {
+  background: var(--ink);
+  color: var(--on-accent);
+}
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--ink); }
+
+:focus-visible {
+  outline: var(--border-width) solid var(--ink);
+  outline-offset: 2px;
+}
+
+
+/* ── HEADER ─────────────────────────────────────────────── */
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-6);
+  background: var(--bg);
+  color: var(--ink);
+  position: relative;
+  z-index: 2;
+}
+
+h1 {
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: var(--text-xl);
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+
+#status,
+h2,
+.label {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+#status { color: var(--ink-dim); }
+
+.nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+/* Start camera with a dropdown arrow holding the camera options. */
+.split {
+  position: relative;
+  display: flex;
+}
+
+.split .arrow {
+  border-left-color: var(--on-accent);
+  padding-inline: 0.7em;
+}
+
+.split .arrow[aria-expanded="true"] {
+  background: transparent;
+  color: var(--ink);
+  border-left-color: var(--ink);
+}
+
+.menu {
+  position: absolute;
+  top: calc(100% + var(--space-2));
+  right: 0;
+  width: 300px;
+  max-width: calc(100vw - 2 * var(--space-4));
+  padding: var(--space-2) var(--space-4) var(--space-4);
+  background: var(--bg);
+  border: var(--border);
+}
+
+.menu[hidden] { display: none; }
+
+
+/* ── LAYOUT ─────────────────────────────────────────────── */
+
+@media (max-width: 860px) {
+  header { padding: var(--space-2) var(--space-4); }
+  #status { display: none; }
+}
+
+h2 {
+  margin-bottom: var(--space-3);
+  padding-bottom: var(--space-1);
+  border-bottom: var(--border);
+}
+
+.muted { color: var(--ink-dim); }
+
+
+/* ── CAMERA STAGE ───────────────────────────────────────── */
+
+.stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: #000;
+  overflow: hidden;
+  container-type: size;
+}
+
+.stage video,
+.stage canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border: none;
+}
+
+.stage.flip-v video { transform: scaleY(-1); }
+.stage.flip-h video { transform: scaleX(-1); }
+.stage.flip-v.flip-h video { transform: scale(-1, -1); }
+
+/* The table: 70% of the camera image's width at a locked 3:1. The image is
+   letterboxed 16:9 inside the stage, so its width is the smaller of the stage
+   width and 16/9 of the stage height (70% of that = 124.4cqh).
+   Raised 120px above centre to leave room for chairs in front of it.
+   Sits under the overlay so code outlines and labels draw on top of it. */
+.stage .table {
+  position: absolute;
+  top: calc(50% - 120px);
+  left: 50%;
+  width: min(70cqw, 124.4cqh);
+  aspect-ratio: 3 / 1;
+  transform: translate(-50%, -50%);
+  border: var(--border-heavy);
+  pointer-events: none;
+}
+
+/* Dotted dividers at the right edge of spots 1 and 2. */
+.stage .table::before,
+.stage .table::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-left: var(--border-width) dotted var(--ink);
+  transform: translateX(-50%);
+}
+
+.stage .table::before { left: calc(100% / 3); }
+.stage .table::after { left: calc(200% / 3); }
+
+.stage .empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--on-accent);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.stage .empty[hidden] { display: none; }
+
+
+/* ── STATES DRAWER ──────────────────────────────────────── */
+
+/* One element holding everything: the seating meter, the State list, the
+   change log and the JSON button. Hidden off the right edge until "Show
+   states" is on. The meter and State list have fixed heights; the change log
+   takes whatever is left and scrolls. */
+.drawer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1;
+  width: 300px;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-4);
+  background: var(--bg);
+  color: var(--ink);
+  border-left: var(--border-heavy);
+  transform: translateX(100%);
+  visibility: hidden;
+  transition: transform 200ms ease, visibility 0s linear 200ms;
+}
+
+body.show-states .drawer {
+  transform: none;
+  visibility: visible;
+  transition: transform 200ms ease;
+}
+
+.drawer h2 { margin-top: var(--space-4); }
+.drawer p { margin-top: var(--space-3); }
+
+/* Taken above Empty, each row wide enough for all three chairs. */
+.seats {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.seats h3 {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+  padding-bottom: var(--space-1);
+  border-bottom: var(--border-thin);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.seats h3 b {
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: var(--text-lg);
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+/* Room for all three chairs on one row in either column, so the meter is the
+   same height whether a column holds none, one or three. */
+.seats .chairs {
+  display: flex;
+  gap: var(--space-2);
+  min-height: calc(28px + 2px + 2.4em);
+  font-size: 10px;
+}
+
+.seat {
+  display: grid;
+  justify-items: center;
+  align-content: start;
+  gap: 2px;
+  width: 72px;
+  text-align: center;
+}
+
+.seat svg { width: 28px; height: 28px; }
+
+/* Names take at most two lines ("Kathy's / chair"). */
+.seat span {
+  display: block;
+  width: 100%;
+  height: 2.4em;
+  line-height: 1.2;
+  overflow: hidden;
+  overflow-wrap: break-word;
+}
+
+/* Taken is a filled chair; empty stays an outline. */
+.seat.taken svg path { fill: var(--ink); }
+.seat.out { opacity: 0.4; }
+
+
+/* ── CONTROLS ───────────────────────────────────────────── */
+
+button {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  padding: 0.6em 0.9em;
+  color: var(--on-accent);
+  background: var(--ink);
+  border: var(--border-thin);
+  cursor: pointer;
+  appearance: none;
+}
+
+button:hover {
+  background: transparent;
+  color: var(--ink);
+}
+
+button.ghost {
+  background: transparent;
+  color: var(--ink);
+}
+
+button.ghost:hover {
+  background: var(--ink);
+  color: var(--on-accent);
+}
+
+button:disabled,
+button:disabled:hover {
+  opacity: 0.4;
+  cursor: not-allowed;
+  background: var(--ink);
+  color: var(--on-accent);
+}
+
+label.row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-3) 0;
+}
+
+label.row.check { justify-content: flex-start; }
+
+input[type=checkbox] {
+  accent-color: var(--ink);
+  width: 1rem;
+  height: 1rem;
+}
+
+/* ── STATE, LOG ────────────────────────────────────────── */
+
+.swatch {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  border: var(--border-thin);
+}
+
+#state {
+  flex: none;
+  height: calc(6 * 1.75rem);
+  overflow: auto;
+}
+
+/* One line per object; long lines are cut with an ellipsis. */
+.group {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 1.75rem;
+  border-bottom: 1px dotted var(--ink);
+}
+
+.group span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#log {
+  list-style: none;
+  flex: 1;
+  min-height: 4rem;
+  overflow: auto;
+  font-size: var(--text-xs);
+}
+
+#log:empty::before {
+  content: "No changes yet";
+  color: var(--ink-dim);
+}
+
+#log li {
+  padding: var(--space-1) 0;
+  border-bottom: 1px dotted var(--ink);
+}
+
+#log time {
+  color: var(--ink-dim);
+  margin-right: var(--space-2);
+  font-variant-numeric: tabular-nums;
+}
+
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

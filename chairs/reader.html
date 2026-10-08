@@ -1,0 +1,573 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chair Reader</title>
+<link rel="stylesheet" href="reader.css">
+</head>
+<body>
+<header>
+  <h1>Chair Reader</h1>
+  <div class="nav">
+    <span id="status">Camera off</span>
+    <div class="split" id="split">
+      <button id="start">Start camera</button>
+      <button id="menuToggle" class="arrow" aria-label="Camera options" aria-haspopup="true" aria-expanded="false" aria-controls="menu">▾</button>
+      <div class="menu" id="menu" hidden>
+        <label class="row check">
+          <input type="checkbox" id="flipV" checked> Flip camera image vertically
+        </label>
+        <label class="row check">
+          <input type="checkbox" id="flipH" checked> Flip camera image horizontally
+        </label>
+      </div>
+    </div>
+    <button class="ghost" id="showStates" aria-pressed="false" aria-controls="drawer">Show states</button>
+  </div>
+</header>
+
+<main class="stage flip-v flip-h" id="stage">
+  <video id="video" playsinline muted></video>
+  <div class="table" id="table" aria-hidden="true"></div>
+  <canvas id="overlay"></canvas>
+  <div class="empty" id="empty">Press Start camera to begin scanning</div>
+
+  <!-- States drawer: slides in from the right when "Show states" is on. -->
+  <aside class="drawer" id="drawer" aria-label="States">
+    <div class="seats" id="seats"></div>
+    <h2>State</h2>
+    <div id="state"><span class="muted">No objects in view</span></div>
+    <h2>Change log</h2>
+    <ul id="log"></ul>
+    <p><button class="ghost" id="copy">Copy state JSON</button></p>
+  </aside>
+</main>
+
+<script type="module">
+  // How long a code stays "present" after its last detection (rides out dropped frames).
+  const HOLD_MS = 700;
+  // How long a new arrangement must stay unchanged before it counts as a state change.
+  const STABLE_MS = 600;
+
+  const video = document.getElementById('video');
+  const canvas = document.getElementById('overlay');
+  const ctx = canvas.getContext('2d');
+  const statusEl = document.getElementById('status');
+
+  let detector = null;
+  let busy = false;
+
+  // rawValue -> { center:{x,y}, size, pts, seen }
+  const tracked = new Map();
+
+  let pendingSig = null, pendingSince = 0, committedSig = null;
+  let currentState = { timestamp: null, inView: [], spots: {}, owners: {} };
+
+  // track id -> the QR text it was read from (they differ for repeated codes, "chair 1 #2").
+  const instanceValue = new Map();
+  const valueOf = id => instanceValue.get(id) ?? id;
+
+  // Each code is a chair or someone's stuff. Stuff is recognised from QR text ending
+  // in "stuff"/"things"/"belongings" ("kathy's stuff"); anything else is a chair.
+  const STUFF_RE = /(?:['’]s?)?\s*\b(stuff|things|belongings)\s*$/i;
+  const isChair = id => !STUFF_RE.test(valueOf(id));
+  const isStuff = id => !isChair(id);
+  // Whose stuff it is: the QR text minus "'s stuff" ("kathy's stuff" → "Kathy").
+  const ownerOf = id => {
+    const v = valueOf(id);
+    const name = v.replace(STUFF_RE, '').trim() || v;
+    return name[0].toUpperCase() + name.slice(1);
+  };
+
+  // Detection always runs on the unflipped frame; mirroring is display-only,
+  // so the overlay flips its coordinates to match the flipped video.
+  let flipV = true, flipH = true;
+  document.getElementById('flipV').addEventListener('change', e => {
+    flipV = e.target.checked;
+    document.getElementById('stage').classList.toggle('flip-v', flipV);
+  });
+  document.getElementById('flipH').addEventListener('change', e => {
+    flipH = e.target.checked;
+    document.getElementById('stage').classList.toggle('flip-h', flipH);
+  });
+
+  // Camera options dropdown, opened from the arrow beside Start camera.
+  const menu = document.getElementById('menu');
+  const menuToggle = document.getElementById('menuToggle');
+  const setMenu = open => {
+    menu.hidden = !open;
+    menuToggle.setAttribute('aria-expanded', open);
+  };
+  menuToggle.addEventListener('click', () => setMenu(menu.hidden));
+  document.addEventListener('click', e => {
+    if (!document.getElementById('split').contains(e.target)) setMenu(false);
+  });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && !menu.hidden) { setMenu(false); menuToggle.focus(); }
+  });
+
+  // "Show states" slides the states drawer in from the right.
+  const showStates = document.getElementById('showStates');
+  showStates.addEventListener('click', () => {
+    const on = document.body.classList.toggle('show-states');
+    showStates.setAttribute('aria-pressed', on);
+    showStates.textContent = on ? 'Hide states' : 'Show states';
+  });
+
+  document.getElementById('copy').addEventListener('click', () => {
+    navigator.clipboard?.writeText(JSON.stringify(currentState, null, 2));
+  });
+
+  // One button turns the camera on and off.
+  const startBtn = document.getElementById('start');
+  const emptyEl = document.getElementById('empty');
+  let stream = null;
+  // Bumped on every start and stop, so a loop from an earlier session ends itself.
+  let session = 0;
+
+  startBtn.addEventListener('click', () => (stream ? stopCamera() : startCamera()));
+
+  async function startCamera() {
+    startBtn.disabled = true;
+    try {
+      statusEl.textContent = 'Loading detector…';
+      detector ??= await getDetector();
+      statusEl.textContent = 'Requesting camera…';
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } },
+        audio: false,
+      });
+      video.srcObject = stream;
+      await video.play();
+      emptyEl.hidden = true;
+      startBtn.textContent = 'Stop camera';
+      statusEl.textContent = 'Scanning';
+      const run = ++session;
+      requestAnimationFrame(() => tick(run));
+    } catch (err) {
+      stream?.getTracks().forEach(t => t.stop());
+      stream = null;
+      statusEl.textContent = 'Error: ' + err.message;
+      console.error(err);
+    }
+    startBtn.disabled = false;
+  }
+
+  // Stopping releases the camera and commits "nothing in view" right away.
+  // Chairs keep their spots and last state, as when they leave the frame.
+  function stopCamera() {
+    session++;
+    stream.getTracks().forEach(t => t.stop());
+    stream = null;
+    video.srcObject = null;
+    tracked.clear();
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    commit([], {});
+    emptyEl.hidden = false;
+    startBtn.textContent = 'Start camera';
+    statusEl.textContent = 'Camera off';
+  }
+
+  // Native BarcodeDetector (Chrome/Edge/Android) can return many codes per frame.
+  // Other browsers fall back to a ZXing-based polyfill with the same API.
+  async function getDetector() {
+    if ('BarcodeDetector' in window) {
+      const formats = await BarcodeDetector.getSupportedFormats();
+      if (formats.includes('qr_code')) return new BarcodeDetector({ formats: ['qr_code'] });
+    }
+    const mod = await import('https://cdn.jsdelivr.net/npm/barcode-detector@2/pure/+esm');
+    return new mod.BarcodeDetector({ formats: ['qr_code'] });
+  }
+
+  async function tick(run) {
+    if (run !== session) return;
+    const now = performance.now();
+    if (!busy && video.readyState >= 2) {
+      busy = true;
+      try {
+        const codes = await detector.detect(video);
+        // Ignore a detection that finishes after the camera was stopped.
+        if (run === session) ingest(codes, performance.now());
+      } catch (err) {
+        console.warn(err);
+      }
+      busy = false;
+      if (run !== session) return;
+    }
+    for (const [id, t] of tracked) if (now - t.seen > HOLD_MS) tracked.delete(id);
+
+    const spots = locateSpots();
+    draw();
+    updateState(spots, now);
+    requestAnimationFrame(() => tick(run));
+  }
+
+
+  // Several printed codes can share the same QR text (e.g. two "kathy's stuff" cards).
+  // Each physical copy gets its own track id: the text itself for the first,
+  // then "text #2", "text #3"…, matched frame to frame by position.
+  function ingest(codes, now) {
+    const byValue = new Map();
+    for (const c of codes) {
+      const pts = c.cornerPoints;
+      if (!pts || pts.length < 4) continue;
+      const center = {
+        x: pts.reduce((s, p) => s + p.x, 0) / pts.length,
+        y: pts.reduce((s, p) => s + p.y, 0) / pts.length,
+      };
+      let size = 0;
+      for (let i = 0; i < 4; i++) size += Math.hypot(pts[(i + 1) % 4].x - pts[i].x, pts[(i + 1) % 4].y - pts[i].y);
+      size /= 4;
+      if (!byValue.has(c.rawValue)) byValue.set(c.rawValue, []);
+      byValue.get(c.rawValue).push({ center, size, pts });
+    }
+
+    for (const [value, dets] of byValue) {
+      // Greedy nearest match between this frame's detections and existing tracks.
+      const tracks = [...tracked].filter(([, t]) => t.value === value);
+      const options = [];
+      dets.forEach((d, di) => tracks.forEach(([id, t]) => {
+        const dist = Math.hypot(d.center.x - t.center.x, d.center.y - t.center.y) / d.size;
+        if (dist < 3) options.push({ di, id, dist });
+      }));
+      options.sort((a, b) => a.dist - b.dist);
+      const matched = new Map(), usedIds = new Set();
+      for (const o of options) {
+        if (matched.has(o.di) || usedIds.has(o.id)) continue;
+        matched.set(o.di, o.id); usedIds.add(o.id);
+      }
+      // A detection with no close track is most likely a copy that moved fast or
+      // skipped frames, so hand it a leftover track (nearest first) rather than
+      // inventing "#2". New ids only appear when more copies are seen than tracked.
+      const leftovers = [];
+      dets.forEach((d, di) => tracks.forEach(([id, t]) => {
+        if (matched.has(di) || usedIds.has(id)) return;
+        leftovers.push({ di, id, dist: Math.hypot(d.center.x - t.center.x, d.center.y - t.center.y) });
+      }));
+      leftovers.sort((a, b) => a.dist - b.dist);
+      for (const o of leftovers) {
+        if (matched.has(o.di) || usedIds.has(o.id)) continue;
+        matched.set(o.di, o.id); usedIds.add(o.id);
+      }
+
+      dets.forEach((d, di) => {
+        let id = matched.get(di);
+        const prev = id && tracked.get(id);
+        if (prev) {
+          // Light smoothing to stop jitter flipping a code between spots at a boundary.
+          // Skipped after a big jump so the code doesn't lag behind where it now is.
+          const jumped = Math.hypot(d.center.x - prev.center.x, d.center.y - prev.center.y) / d.size >= 3;
+          if (!jumped) {
+            d.center.x = prev.center.x * 0.4 + d.center.x * 0.6;
+            d.center.y = prev.center.y * 0.4 + d.center.y * 0.6;
+            d.size = prev.size * 0.4 + d.size * 0.6;
+          }
+        } else {
+          let n = 1;
+          do { id = n === 1 ? value : `${value} #${n}`; n++; } while (tracked.has(id) || usedIds.has(id));
+          usedIds.add(id);
+          instanceValue.set(id, value);
+        }
+        tracked.set(id, { value, center: d.center, size: d.size, pts: d.pts, seen: now });
+      });
+    }
+  }
+
+  // The table is invisibly split into three equal "spots", numbered 1–3 left to
+  // right as displayed. A code's spot is the third of the table its centre is in.
+  // Chairs sit in front of the table, so for them only the left–right position
+  // counts; anything else must be on the table to have a spot.
+  const SPOTS = 3;
+  const stageEl = document.getElementById('stage');
+  const tableEl = document.getElementById('table');
+  // Where the video and table sit on the page. The video is drawn with
+  // object-fit: contain, so k and (ox, oy) map video pixels to page pixels.
+  function layout() {
+    const vw = video.videoWidth, vh = video.videoHeight;
+    if (!vw || !vh) return null;
+    const stage = stageEl.getBoundingClientRect();
+    const table = tableEl.getBoundingClientRect();
+    const k = Math.min(stage.width / vw, stage.height / vh);
+    const ox = stage.left + (stage.width - vw * k) / 2;
+    const oy = stage.top + (stage.height - vh * k) / 2;
+    return { vw, vh, k, ox, oy, table };
+  }
+
+  function locateSpots() {
+    const spots = {};
+    const L = layout();
+    if (!L) return spots;
+    const { vw, vh, k, ox, oy, table } = L;
+    for (const [id, t] of tracked) {
+      const x = ox + (flipH ? vw - t.center.x : t.center.x) * k;
+      const y = oy + (flipV ? vh - t.center.y : t.center.y) * k;
+      if (x < table.left || x >= table.right) continue;
+      if (!isChair(id) && (y < table.top || y >= table.bottom)) continue;
+      spots[id] = 1 + Math.floor((x - table.left) / (table.width / SPOTS));
+    }
+    return spots;
+  }
+
+  // Each chair has its own colour and marker shape, keyed by the number in its
+  // QR text. Stuff takes the colour of the chair it claims, and is white otherwise.
+  const CHAIR_STYLES = {
+    1: { color: '#e3271b', shape: 'triangle' },
+    2: { color: '#1fa34a', shape: 'circle' },
+    3: { color: '#1f5fe0', shape: 'square' },
+  };
+  const styleOf = id => CHAIR_STYLES[isChair(id) && valueOf(id).match(/chair\s*(\d+)/i)?.[1]];
+  const colorOf = id => {
+    if (stuffChair.has(id)) return colorOf(stuffChair.get(id));
+    return styleOf(id)?.color || '#fff';
+  };
+
+  // A small filled marker centred on (x, y), in canvas pixels.
+  function marker(shape, x, y, r) {
+    ctx.beginPath();
+    if (shape === 'triangle') {
+      ctx.moveTo(x, y - r);
+      ctx.lineTo(x + r * 0.95, y + r * 0.65);
+      ctx.lineTo(x - r * 0.95, y + r * 0.65);
+      ctx.closePath();
+    } else if (shape === 'square') {
+      ctx.rect(x - r * 0.8, y - r * 0.8, r * 1.6, r * 1.6);
+    } else {
+      ctx.arc(x, y, r * 0.85, 0, Math.PI * 2);
+    }
+    ctx.fill();
+  }
+
+  // How far along the segment a→b (0–1) it leaves the outline `pts`, where a is
+  // inside the outline. Flipping is display-only, so this works in video pixels.
+  function exitT(a, b, pts) {
+    let best = 0;
+    const dx = b.x - a.x, dy = b.y - a.y;
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i], q = pts[(i + 1) % pts.length];
+      const ex = q.x - p.x, ey = q.y - p.y;
+      const den = dx * ey - dy * ex;
+      if (!den) continue;
+      const t = ((p.x - a.x) * ey - (p.y - a.y) * ex) / den;
+      const u = ((p.x - a.x) * dy - (p.y - a.y) * dx) / den;
+      if (t >= 0 && t <= 1 && u >= 0 && u <= 1) best = Math.max(best, t);
+    }
+    return best;
+  }
+
+  function draw() {
+    if (canvas.width !== video.videoWidth) canvas.width = video.videoWidth;
+    if (canvas.height !== video.videoHeight) canvas.height = video.videoHeight;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const scale = canvas.width / 960;
+    const mx = x => (flipH ? canvas.width - x : x);
+    const my = y => (flipV ? canvas.height - y : y);
+
+    ctx.lineWidth = 3 * scale;
+    ctx.font = `${16 * scale}px w95fa, ui-monospace, monospace`;
+
+    // Dotted line from each chair to the stuff claiming it, in the chair's
+    // colour, while both are in view. Drawn first so labels sit on top.
+    ctx.setLineDash([2 * scale, 6 * scale]);
+    ctx.lineCap = 'round';
+    for (const [stuff, chair] of stuffChair) {
+      const ca = tracked.get(chair), cb = tracked.get(stuff);
+      if (!ca || !cb) continue;
+      // Run centre to centre, but only draw the part between the two outlines.
+      const a = ca.center, b = cb.center;
+      const t0 = exitT(a, b, ca.pts), t1 = 1 - exitT(b, a, cb.pts);
+      if (t0 >= t1) continue; // outlines touch or overlap
+      const at = t => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
+      const p = at(t0), q = at(t1);
+      ctx.strokeStyle = colorOf(chair);
+      ctx.beginPath(); ctx.moveTo(mx(p.x), my(p.y)); ctx.lineTo(mx(q.x), my(q.y)); ctx.stroke();
+    }
+
+    // Dotted line from each chair in view to the centre of the spot it is
+    // designated to, starting at the chair's outline and capped at the spot
+    // centre with the chair's marker (triangle / circle / square). Once stuff
+    // occupies the spot, the chair-to-stuff line takes over and this pointer hides.
+    const L = layout();
+    const caps = [];
+    if (L) {
+      const { vw, vh, k, ox, oy, table } = L;
+      for (const [n, chair] of spotChair) {
+        const t = tracked.get(chair);
+        if (!t || chairOwner.has(chair)) continue;
+        // Spot centre in video pixels (undo the display flip).
+        const dx = (table.left + (n - 0.5) * table.width / SPOTS - ox) / k;
+        const dy = (table.top + table.height / 2 - oy) / k;
+        const b = { x: flipH ? vw - dx : dx, y: flipV ? vh - dy : dy };
+        const a = t.center;
+        const t0 = exitT(a, b, t.pts);
+        const p = { x: a.x + (b.x - a.x) * t0, y: a.y + (b.y - a.y) * t0 };
+        ctx.strokeStyle = colorOf(chair);
+        ctx.beginPath(); ctx.moveTo(mx(p.x), my(p.y)); ctx.lineTo(mx(b.x), my(b.y)); ctx.stroke();
+        caps.push({ chair, x: mx(b.x), y: my(b.y) });
+      }
+    }
+    ctx.setLineDash([]);
+    ctx.lineCap = 'butt';
+    for (const c of caps) {
+      ctx.fillStyle = colorOf(c.chair);
+      marker(styleOf(c.chair)?.shape, c.x, c.y, 9 * scale);
+    }
+
+    for (const [id, t] of tracked) {
+      ctx.strokeStyle = colorOf(id);
+      ctx.beginPath();
+      t.pts.forEach((p, i) => (i ? ctx.lineTo(mx(p.x), my(p.y)) : ctx.moveTo(mx(p.x), my(p.y))));
+      ctx.closePath(); ctx.stroke();
+      const text = displayName(id);
+      const w = ctx.measureText(text).width;
+      // Anchor the label above the code's top-left corner as displayed.
+      const x = Math.min(...t.pts.map(p => mx(p.x)));
+      const y = Math.min(...t.pts.map(p => my(p.y))) - 8 * scale;
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(x - 4 * scale, y - 16 * scale, w + 8 * scale, 20 * scale);
+      ctx.fillStyle = '#000';
+      ctx.fillText(text, x, y);
+    }
+  }
+
+  function updateState(spots, now) {
+    const inView = [...tracked.keys()].sort();
+    const sig = inView.map(id => `${id}@${spots[id] ?? '-'}`).join(',');
+    if (sig !== pendingSig) { pendingSig = sig; pendingSince = now; return; }
+    if (sig === committedSig || now - pendingSince < STABLE_MS) return;
+    commit(inView, spots, sig);
+  }
+
+  function commit(inView, spots, sig = '') {
+    pendingSig = committedSig = sig;
+    currentState = { timestamp: new Date().toISOString(), inView, spots, owners: {} };
+    inView.forEach(id => seatIds.add(id));
+    designate();
+    refresh();
+    logChange();
+    // Hook for later steps (adding info, querying): listen for this event.
+    window.chairState = currentState;
+    window.dispatchEvent(new CustomEvent('chairstate', { detail: currentState }));
+  }
+
+  function el(tag, attrs = {}, ...children) {
+    const n = document.createElement(tag);
+    Object.assign(n, attrs);
+    n.append(...children);
+    return n;
+  }
+
+  // One line per object: "chair 2 — spot 2 — Kathy's chair", "kathy's stuff — spot 2".
+  function describeObject(id) {
+    const parts = [id];
+    if (currentState.spots[id]) parts.push(`spot ${currentState.spots[id]}`);
+    if (isChair(id)) parts.push(chairOwner.has(id) ? displayName(id) : 'empty');
+    return parts.join(' — ');
+  }
+
+  function renderState() {
+    const box = document.getElementById('state');
+    box.replaceChildren();
+    if (!currentState.inView.length) {
+      box.append(el('span', { className: 'muted', textContent: 'No objects in view' }));
+      return;
+    }
+    for (const id of currentState.inView) {
+      // Filled swatch: a claimed chair.
+      const sw = el('span', { className: 'swatch' });
+      sw.style.background = chairOwner.has(id) ? 'var(--ink)' : 'transparent';
+      box.append(el('div', { className: 'group' }, sw, el('span', { textContent: describeObject(id) })));
+    }
+  }
+
+  // Every code that has been part of a committed state. Using committed (stable)
+  // state rather than raw detections keeps the panel from flickering.
+  const seatIds = new Set();
+  // spot number -> the chair designated to it. Sticky: a chair keeps its spot
+  // while out of view, until another chair is placed in front of that spot.
+  const spotChair = new Map();
+  // chair id -> owner name, while that owner's stuff sits on the chair's spot.
+  const chairOwner = new Map();
+  // stuff id -> the chair it claims.
+  const stuffChair = new Map();
+
+  // A claimed chair is "Kathy's chair"; any other chair is just "Empty".
+  const displayName = id => {
+    if (!isChair(id)) return id;
+    return chairOwner.has(id) ? `${chairOwner.get(id)}'s chair` : 'Empty';
+  };
+
+  // A chair placed in front of a spot is designated to it. One chair per spot:
+  // the latest chair there takes it over.
+  function designate() {
+    for (const [id, n] of Object.entries(currentState.spots)) {
+      if (!isChair(id)) continue;
+      for (const [s, c] of spotChair) if (c === id) spotChair.delete(s);
+      spotChair.set(n, id);
+    }
+  }
+
+  // Someone's stuff on a spot claims that spot's chair for as long as it stays.
+  function claim() {
+    chairOwner.clear();
+    stuffChair.clear();
+    for (const [id, n] of Object.entries(currentState.spots)) {
+      const chair = spotChair.get(n);
+      if (!isStuff(id) || !chair) continue;
+      chairOwner.set(chair, ownerOf(id));
+      stuffChair.set(id, chair);
+    }
+    currentState.owners = Object.fromEntries(chairOwner);
+  }
+
+  function refresh() {
+    claim();
+    renderState();
+    renderSeats();
+  }
+
+  const CHAIR_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true">' +
+    '<path d="M7 2h10v10H7z M5 12h14v3H5z" fill="none" stroke="currentColor" stroke-width="1.6"/>' +
+    '<path d="M6.5 15v7 M17.5 15v7" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>';
+
+  function renderSeats() {
+    const visible = new Set(currentState.inView);
+
+    // Any chair that isn't claimed is empty.
+    const taken = [], free = [];
+    for (const id of [...seatIds].sort()) {
+      if (!isChair(id)) continue;
+      (chairOwner.has(id) ? taken : free).push(id);
+    }
+
+    const box = document.getElementById('seats');
+    box.replaceChildren();
+
+    const column = (title, ids, cls) => {
+      const chairs = el('div', { className: 'chairs' });
+      for (const id of ids) {
+        const seat = el('div', { className: 'seat ' + cls + (visible.has(id) ? '' : ' out') });
+        seat.title = visible.has(id) ? '' : 'Out of view — showing last known state';
+        seat.innerHTML = CHAIR_SVG;
+        seat.append(el('span', { textContent: displayName(id) }));
+        chairs.append(seat);
+      }
+      if (!ids.length) chairs.append(el('span', { className: 'muted', textContent: '—' }));
+      return el('div', {}, el('h3', {}, title, el('b', { textContent: ids.length })), chairs);
+    };
+
+    box.append(column('Taken', taken, 'taken'), column('Empty', free, 'free'));
+  }
+
+  function logChange() {
+    const log = document.getElementById('log');
+    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const text = currentState.inView.length ? currentState.inView.map(describeObject).join('; ') : 'No objects in view';
+    log.prepend(el('li', {}, el('time', { textContent: time }), text));
+  }
+
+  // Draw the empty meter up front so the drawer is laid out from the start.
+  renderSeats();
+</script>
+</body>
+</html>
