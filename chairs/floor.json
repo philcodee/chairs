@@ -1,0 +1,45 @@
+{
+  "name": "Floor 4",
+  "size": [100, 62],
+  "rooms": [
+    {
+      "id": "studio",
+      "name": "Studio",
+      "live": true,
+      "rect": [2, 2, 52, 29.25],
+      "tables": [
+        { "id": "A", "spots": 3, "rect": [0.06, 0.2, 0.42, 0.249] },
+        { "id": "B", "spots": 3, "rect": [0.52, 0.2, 0.42, 0.249] }
+      ]
+    },
+    {
+      "id": "lab",
+      "name": "Lab",
+      "rect": [56, 2, 42, 29.25],
+      "tables": [
+        { "id": "A", "spots": 2, "rect": [0.08, 0.16, 0.36, 0.22] },
+        { "id": "B", "spots": 2, "rect": [0.56, 0.16, 0.36, 0.22] },
+        { "id": "C", "spots": 4, "rect": [0.14, 0.58, 0.72, 0.18] }
+      ],
+      "demo": { "A1": "Maya", "A2": "", "B1": "", "B2": "Jun", "C1": "", "C2": "Ana", "C3": "", "C4": "" }
+    },
+    {
+      "id": "lounge",
+      "name": "Lounge",
+      "rect": [2, 35, 30, 25],
+      "tables": [
+        { "id": "A", "spots": 2, "rect": [0.2, 0.32, 0.6, 0.26] }
+      ],
+      "demo": { "A1": "", "A2": "" }
+    },
+    {
+      "id": "seminar",
+      "name": "Seminar",
+      "rect": [36, 35, 62, 25],
+      "tables": [
+        { "id": "A", "spots": 6, "rect": [0.08, 0.3, 0.84, 0.24] }
+      ],
+      "demo": { "A1": "Leo", "A2": "Sam", "A3": "Iris", "A4": "", "A5": "Noor", "A6": "Theo" }
+    }
+  ]
+}

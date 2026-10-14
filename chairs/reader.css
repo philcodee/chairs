@@ -236,35 +236,11 @@ h2 {
 .stage.flip-h video { transform: scaleX(-1); }
 .stage.flip-v.flip-h video { transform: scale(-1, -1); }
 
-/* The table: 70% of the camera image's width at a locked 3:1. The image is
-   letterboxed 16:9 inside the stage, so its width is the smaller of the stage
-   width and 16/9 of the stage height (70% of that = 124.4cqh).
-   Raised 120px above centre to leave room for chairs in front of it.
-   Sits under the overlay so code outlines and labels draw on top of it. */
-.stage .table {
-  position: absolute;
-  top: calc(50% - 120px);
-  left: 50%;
-  width: min(70cqw, 124.4cqh);
-  aspect-ratio: 3 / 1;
-  transform: translate(-50%, -50%);
-  border: var(--border-heavy);
-  pointer-events: none;
-}
-
-/* Dotted dividers at the right edge of spots 1 and 2. */
-.stage .table::before,
-.stage .table::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  border-left: var(--border-width) dotted var(--ink);
-  transform: translateX(-50%);
-}
-
-.stage .table::before { left: calc(100% / 3); }
-.stage .table::after { left: calc(200% / 3); }
+/* Tables are drawn on the overlay canvas from floor.json. The hand feedback
+   canvas sits above the room and floor views and never takes clicks.
+   Pinches on the stage are handled in script, not by the browser. */
+.stage #hands { pointer-events: none; }
+.stage > :not(.drawer) { touch-action: none; }
 
 .stage .empty {
   position: absolute;
@@ -279,6 +255,87 @@ h2 {
 }
 
 .stage .empty[hidden] { display: none; }
+
+
+/* ── ROOM & FLOOR VIEWS ─────────────────────────────────── */
+
+/* Light paper ground over the camera. Shown when zoomed out to room or floor;
+   the drawing inside is scaled from script as the pinch magnifies it. */
+.views {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--ink);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 150ms ease, visibility 0s linear 150ms;
+}
+
+.stage[data-level="room"] .views,
+.stage[data-level="floor"] .views {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 150ms ease;
+}
+
+.views svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: var(--space-6);
+  display: none;
+  overflow: visible;
+}
+
+.stage[data-level="room"] #roomView,
+.stage[data-level="floor"] #floorView { display: block; }
+
+/* SVG text sizes are in drawing units: both views are about 100 units wide. */
+.views text { fill: var(--ink); font-family: var(--font-mono); text-rendering: geometricPrecision; }
+.views .v-name { font-family: var(--font-display); }
+.views .v-tag { font-weight: 700; letter-spacing: 0.12em; fill: var(--ink-dim); }
+.views .v-count { font-family: var(--font-display); }
+.views .dim { fill: var(--ink-dim); }
+.views .out { opacity: 0.4; }
+
+/* Owner names sit on hatching, so they get a ground-coloured halo. */
+.views .v-owner {
+  font-weight: 700;
+  paint-order: stroke;
+  stroke: var(--bg);
+  stroke-linejoin: round;
+}
+
+#roomView .v-name  { font-size: 6px; }
+#roomView .v-tag   { font-size: 1.6px; }
+#roomView .v-count { font-size: 6px; }
+#roomView .v-of    { font-size: 2.2px; }
+#roomView .v-label { font-size: 1.8px; }
+#roomView .v-owner { font-size: 2.4px; stroke-width: 0.9px; }
+
+#floorView .v-name  { font-size: 3.6px; }
+#floorView .v-room  { font-size: 1.8px; font-weight: 700; }
+#floorView .v-tag   { font-size: 1px; }
+#floorView .v-count { font-size: 3px; }
+#floorView .v-of    { font-size: 1.2px; }
+
+/* Rooms on the floor plan open on click as well as by pinch. */
+#floorView .room { cursor: pointer; }
+#floorView .room .hit { fill: var(--bg); }
+#floorView .room:hover .hit { fill: #c9c6c1; }
+
+
+/* ── ZOOM LEVELS (nav) ──────────────────────────────────── */
+
+.levels { display: flex; }
+.levels button + button { border-left: none; }
+
+.levels button[aria-pressed="true"] {
+  background: var(--ink);
+  color: var(--on-accent);
+}
 
 
 /* ── STATES DRAWER ──────────────────────────────────────── */
@@ -348,6 +405,7 @@ body.show-states .drawer {
    same height whether a column holds none, one or three. */
 .seats .chairs {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-2);
   min-height: calc(28px + 2px + 2.4em);
   font-size: 10px;
@@ -428,7 +486,10 @@ label.row {
 
 label.row.check { justify-content: flex-start; }
 
-input[type=checkbox] {
+
+input[type=checkbox],
+input[type=radio] {
+  flex: none;
   accent-color: var(--ink);
   width: 1rem;
   height: 1rem;
